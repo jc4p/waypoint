@@ -1,0 +1,4 @@
+redis==5.0.1
+protobuf==4.25.1
+python-dotenv==1.0.0
+grpcio-tools==1.60.0

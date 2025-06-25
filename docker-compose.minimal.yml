@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  waypoint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    init: true
+    restart: on-failure
+    command: ./waypoint start
+    network_mode: "host"  # Use host network to access local Redis
+    environment:
+      # No database - we're using Redis only
+      WAYPOINT_DATABASE__STORE_MESSAGES: "false"
+      
+      # Redis on host machine
+      WAYPOINT_REDIS__URL: redis://localhost:6379
+      WAYPOINT_REDIS__POOL_SIZE: 20  # Reduced for minimal RAM usage
+      WAYPOINT_REDIS__BATCH_SIZE: 50  # Smaller batches for lower memory
+      
+      # Snapchain connection
+    WAYPOINT_HUB__URL: ${WAYPOINT_HUB__URL:-0.0.0.0}
+      
+      # FID Filter configuration
+      WAYPOINT_FID_FILTER__ENABLED: ${WAYPOINT_FID_FILTER__ENABLED:-true}
+      WAYPOINT_FID_FILTER__ALLOWED_FIDS: ${WAYPOINT_FID_FILTER__ALLOWED_FIDS:-}
+      
+      # Disable features we don't need
+      WAYPOINT_MCP__ENABLED: "false"
+      WAYPOINT_STATSD__ENABLED: "false"
+      
+      # Logging
+      RUST_LOG: ${RUST_LOG:-info}
+      RUST_BACKTRACE: ${RUST_BACKTRACE:-0}
+      
+      # Memory optimization
+      WAYPOINT_DATABASE__MAX_CONNECTIONS: 0  # No DB connections
+      
+    mem_limit: 500m  # Limit memory usage
+    cpus: 1.0  # Limit CPU usage
+
+  python-consumer:
+    build:
+      context: ./python-consumer
+      dockerfile: Dockerfile
+    network_mode: "host"  # Use host network to access local Redis
+    restart: on-failure
+    environment:
+      REDIS_URL: redis://localhost:6379
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    depends_on:
+      - waypoint
+    mem_limit: 100m  # Minimal memory for Python consumer
+    cpus: 0.5

@@ -1,6 +1,6 @@
 use crate::{
     config::HubConfig,
-    hub::{error::Error, filter::SpamFilter, stats::ProcessingStats},
+    hub::{error::Error, fid_filter::FidFilter, filter::SpamFilter, stats::ProcessingStats},
     proto::{
         GetInfoRequest, HubEvent, HubEventType, SubscribeRequest, hub_event,
         hub_service_client::HubServiceClient,
@@ -58,6 +58,7 @@ pub struct HubSubscriber {
     connection_timeout: Duration,
     spam_filter: Arc<SpamFilter>,
     spam_filter_enabled: bool,
+    fid_filter: Arc<FidFilter>,
     // Track last successful Redis publish time for better connection monitoring
     last_successful_flush: Arc<RwLock<Option<Instant>>>,
     // Enhanced connection tracking and retry configuration
@@ -129,6 +130,11 @@ impl HubSubscriber {
 
         let connection_timeout = Duration::from_millis(hub_config.conn_timeout_ms);
 
+        // Use provided FID filter or create a disabled one
+        let fid_filter = opts.fid_filter.unwrap_or_else(|| {
+            Arc::new(FidFilter::new(Vec::new(), false))
+        });
+
         Self {
             hub,
             redis,
@@ -152,6 +158,7 @@ impl HubSubscriber {
             connection_timeout,
             spam_filter,
             spam_filter_enabled,
+            fid_filter,
             last_successful_flush: Arc::new(RwLock::new(Some(Instant::now()))),
             consecutive_errors: Arc::new(std::sync::atomic::AtomicU32::new(0)),
             last_success: Arc::new(std::sync::atomic::AtomicU64::new(current_time)),
@@ -758,7 +765,7 @@ impl HubSubscriber {
         trace!("Flushing batch of {} events ({} bytes)", event_count, batch.current_bytes);
 
         // Filter spam events if enabled
-        let keep_indices = if self.spam_filter_enabled {
+        let mut keep_indices = if self.spam_filter_enabled {
             self.spam_filter
                 .filter_events(&batch.events.iter().map(|(e, _)| e.clone()).collect::<Vec<_>>())
                 .await
@@ -767,9 +774,30 @@ impl HubSubscriber {
             (0..batch.events.len()).collect()
         };
 
-        let filtered_count = event_count - keep_indices.len();
-        if filtered_count > 0 {
-            trace!("Filtered {} spam events from batch", filtered_count);
+        let spam_filtered = event_count - keep_indices.len();
+        if spam_filtered > 0 {
+            trace!("Filtered {} spam events from batch", spam_filtered);
+        }
+
+        // Apply FID filter if enabled
+        if self.fid_filter.is_enabled() {
+            let events_for_fid_filter: Vec<HubEvent> = keep_indices
+                .iter()
+                .map(|&idx| batch.events[idx].0.clone())
+                .collect();
+            
+            let fid_keep_indices = self.fid_filter.filter_events(&events_for_fid_filter).await;
+            
+            // Map the FID filter indices back to the original batch indices
+            keep_indices = fid_keep_indices
+                .into_iter()
+                .map(|idx| keep_indices[idx])
+                .collect();
+            
+            let fid_filtered = event_count - spam_filtered - keep_indices.len();
+            if fid_filtered > 0 {
+                trace!("Filtered {} events not matching allowed FIDs", fid_filtered);
+            }
         }
 
         let event_groups: DashMap<&str, Vec<Vec<u8>>> = DashMap::new();
@@ -966,4 +994,5 @@ pub struct SubscriberOptions {
     pub after_process: Option<PostProcessHandler>,
     pub hub_config: Option<Arc<HubConfig>>,
     pub spam_filter_enabled: Option<bool>,
+    pub fid_filter: Option<Arc<FidFilter>>,
 }

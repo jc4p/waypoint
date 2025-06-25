@@ -213,6 +213,28 @@ pub struct McpConfig {
     pub port: u16,
 }
 
+/// FID filter configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FidFilterConfig {
+    #[serde(default = "default_fid_filter_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub allowed_fids: Vec<u64>,
+}
+
+impl Default for FidFilterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_fid_filter_enabled(),
+            allowed_fids: Vec::new(),
+        }
+    }
+}
+
+fn default_fid_filter_enabled() -> bool {
+    false
+}
+
 impl Default for McpConfig {
     fn default() -> Self {
         Self {
@@ -257,6 +279,8 @@ pub struct Config {
     pub eth: EthConfig,
     #[serde(default = "default_clear_db")]
     pub clear_db: bool,
+    #[serde(default)]
+    pub fid_filter: FidFilterConfig,
 }
 
 /// Backfill configuration
@@ -355,9 +379,9 @@ impl Config {
 
     /// Validate the configuration
     pub fn validate(&self) -> Result<(), ConfigError> {
-        // Validate database config
-        if self.database.url.is_empty() {
-            return Err(ConfigError::MissingConfig("Database URL is required".to_string()));
+        // Validate database config only if store_messages is true
+        if self.database.store_messages && self.database.url.is_empty() {
+            return Err(ConfigError::MissingConfig("Database URL is required when store_messages is enabled".to_string()));
         }
 
         // Validate Redis config

@@ -41,11 +41,17 @@ impl StateProvider {
         let hub =
             Arc::new(Mutex::new(Hub::new(hub_config).map_err(|e| AppError::Hub(e.to_string()))?));
 
-        let database = Arc::new(
-            Database::new(&self.config.database)
-                .await
-                .map_err(|e| AppError::Database(e.to_string()))?,
-        );
+        // Create database connection only if store_messages is enabled
+        let database = if self.config.database.store_messages {
+            Arc::new(
+                Database::new(&self.config.database)
+                    .await
+                    .map_err(|e| AppError::Database(e.to_string()))?,
+            )
+        } else {
+            // Use empty database when not storing messages
+            Arc::new(Database::empty())
+        };
 
         // Test connections
         redis.check_connection().await.map_err(|e| AppError::Redis(e.to_string()))?;
@@ -55,8 +61,10 @@ impl StateProvider {
             hub_guard.connect().await.map_err(|e| AppError::Hub(e.to_string()))?;
         }
 
-        // Log database connection info (safely)
-        database.log_connection_info();
+        // Log database connection info only if database is enabled
+        if self.config.database.store_messages {
+            database.log_connection_info();
+        }
 
         // Create the state
         let state = AppState { hub, redis, database };

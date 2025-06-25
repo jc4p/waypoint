@@ -2,7 +2,7 @@
 use crate::{
     app::{ProcessorRegistry, Result, Service, ServiceContext, ServiceError, ServiceHandle},
     core::MessageType,
-    hub::subscriber::{HubSubscriber, SubscriberOptions},
+    hub::{fid_filter::FidFilter, subscriber::{HubSubscriber, SubscriberOptions}},
     proto::HubEvent,
     redis::{error::Error, stream::RedisStream},
 };
@@ -1483,6 +1483,18 @@ impl Service for StreamingService {
             }
 
             options.hub_config = Some(Arc::new(context.config.hub.clone()));
+
+            // Configure FID filter if enabled
+            if context.config.fid_filter.enabled {
+                let fid_filter = Arc::new(FidFilter::new(
+                    context.config.fid_filter.allowed_fids.clone(),
+                    true
+                ));
+                options.fid_filter = Some(fid_filter);
+                info!("FID filter enabled with {} allowed FIDs", context.config.fid_filter.allowed_fids.len());
+            } else {
+                info!("FID filter disabled - all FIDs will be processed");
+            }
 
             HubSubscriber::new(
                 client.clone(),
