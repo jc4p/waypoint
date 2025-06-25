@@ -124,7 +124,7 @@ impl ProcessorRegistry {
         let processors = match self.processors.get(&message_type) {
             Some(p) => p,
             None => {
-                warn!("No processors registered for message type: {:?}", message_type);
+                trace!("No processors registered for message type: {:?}", message_type);
                 return Ok(());
             },
         };

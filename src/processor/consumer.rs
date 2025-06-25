@@ -54,17 +54,9 @@ impl Consumer {
     }
 
     fn get_stream_keys(&self) -> impl Iterator<Item = (&str, &str)> {
+        // ONLY process casts - ignore all other message types
         [
             ("casts", "casts"),
-            ("reactions", "reactions"),
-            ("links", "links"),
-            ("verifications", "verifications"),
-            ("user_data", "user_data"),
-            ("username_proofs", "username_proofs"),
-            ("onchain:signer", "onchain"),
-            ("onchain:signer_migrated", "onchain"),
-            ("onchain:id_register", "onchain"),
-            ("onchain:storage_rent", "onchain"),
         ]
         .into_iter()
     }

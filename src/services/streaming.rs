@@ -100,9 +100,9 @@ impl Consumer {
         let mut handles = Vec::new();
 
         // Create a barrier for synchronizing startup across all tasks
-        // Count message types for calculating channel capacity
-        let message_types_count = MessageType::all().collect::<Vec<_>>().len();
-        let total_tasks = message_types_count * 2 + 1; // *2 for processor and cleanup tasks + 1 for consumer cleanup
+        // ONLY processing Cast messages, so we have:
+        // 1 processor task + 1 cleanup task + 1 consumer cleanup task = 3 total
+        let total_tasks = 3;
         let (startup_tx, mut startup_rx) = tokio::sync::mpsc::channel(total_tasks);
 
         // Start consumer cleanup task to periodically clean up idle consumers
@@ -121,43 +121,43 @@ impl Consumer {
         });
         handles.push(consumer_cleanup_handle);
 
-        for message_type in MessageType::all() {
-            let consumer_clone = Arc::clone(&consumer);
-            let startup_tx_clone = startup_tx.clone();
+        // ONLY process Cast messages - ignore all other message types
+        let message_type = MessageType::Cast;
+        let consumer_clone = Arc::clone(&consumer);
+        let startup_tx_clone = startup_tx.clone();
 
-            let handle = tokio::spawn(async move {
-                // Signal that initialization is about to start
-                let _ = startup_tx_clone.send(()).await;
+        let handle = tokio::spawn(async move {
+            // Signal that initialization is about to start
+            let _ = startup_tx_clone.send(()).await;
 
-                // Wait briefly to ensure we don't cause contention during initialization
-                tokio::time::sleep(Duration::from_millis(10)).await;
+            // Wait briefly to ensure we don't cause contention during initialization
+            tokio::time::sleep(Duration::from_millis(10)).await;
 
-                if let Err(e) = consumer_clone.process_stream(message_type).await {
-                    error!("Stream processor error for {:?}: {}", message_type, e);
-                }
-                info!("Stream processor for {:?} shut down", message_type);
-            });
-            handles.push(handle);
-        }
+            if let Err(e) = consumer_clone.process_stream(message_type).await {
+                error!("Stream processor error for {:?}: {}", message_type, e);
+            }
+            info!("Stream processor for {:?} shut down", message_type);
+        });
+        handles.push(handle);
 
         // Start cleanup task for old events and track their handles
         let mut cleanup_handles = Vec::new();
-        for message_type in MessageType::all() {
-            let consumer_clone = Arc::clone(&consumer);
-            let startup_tx_clone = startup_tx.clone();
+        // ONLY clean up Cast streams
+        let message_type = MessageType::Cast;
+        let consumer_clone = Arc::clone(&consumer);
+        let startup_tx_clone = startup_tx.clone();
 
-            let cleanup_handle = tokio::spawn(async move {
-                // Signal that initialization is about to start
-                let _ = startup_tx_clone.send(()).await;
+        let cleanup_handle = tokio::spawn(async move {
+            // Signal that initialization is about to start
+            let _ = startup_tx_clone.send(()).await;
 
-                // Wait briefly to ensure we don't cause contention during initialization
-                tokio::time::sleep(Duration::from_millis(10)).await;
+            // Wait briefly to ensure we don't cause contention during initialization
+            tokio::time::sleep(Duration::from_millis(10)).await;
 
-                consumer_clone.cleanup_old_events(message_type).await;
-                info!("Cleanup task for {:?} shut down", message_type);
-            });
-            cleanup_handles.push(cleanup_handle);
-        }
+            consumer_clone.cleanup_old_events(message_type).await;
+            info!("Cleanup task for {:?} shut down", message_type);
+        });
+        cleanup_handles.push(cleanup_handle);
 
         // Drop our reference to the sender so the receiver can complete
         drop(startup_tx);
@@ -1358,9 +1358,9 @@ impl Service for StreamingService {
         // Create processor registry
         let mut processor_registry = ProcessorRegistry::new(Arc::clone(&context.state));
 
-        // Always register the database processor since it's core functionality
-        {
-            info!("Registering database processor");
+        // Only register the database processor if store_messages is enabled
+        if context.config.database.store_messages {
+            info!("Registering database processor (store_messages=true)");
 
             // Create a wrapper that implements the app's EventProcessor trait
             struct DatabaseWrapper {
@@ -1393,12 +1393,15 @@ impl Service for StreamingService {
                 }
 
                 fn supported_types(&self) -> Vec<MessageType> {
-                    MessageType::all().collect()
+                    // ONLY support Cast messages
+                    vec![MessageType::Cast]
                 }
             }
 
             let wrapper = DatabaseWrapper::new(&app_resources);
             processor_registry.register(wrapper);
+        } else {
+            info!("Skipping database processor registration (store_messages=false)");
         }
 
         // Register print processor if enabled

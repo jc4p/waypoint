@@ -71,16 +71,17 @@ class CastLatencyConsumer:
             shift += 7
         return result, offset
         
-    def parse_hub_event(self, data: bytes) -> Tuple[Optional[int], Optional[int], Optional[int]]:
+    def parse_hub_event(self, data: bytes) -> Tuple[Optional[int], Optional[int], Optional[int], Optional[bytes]]:
         """
-        Parse HubEvent protobuf to extract timestamp and FID
-        Returns: (event_timestamp_ms, cast_timestamp_ms, fid)
+        Parse HubEvent protobuf to extract timestamp, FID, and message hash
+        Returns: (event_timestamp_ms, cast_timestamp_ms, fid, message_hash)
         """
         try:
             offset = 0
             event_timestamp = None
             cast_timestamp = None
             fid = None
+            message_hash = None
             
             while offset < len(data):
                 # Read field tag
@@ -129,7 +130,7 @@ class CastLatencyConsumer:
                                 msg_field = msg_tag >> 3
                                 msg_wire = msg_tag & 0x7
                                 
-                                # Look for data field in message
+                                # Look for data field in message (field 1)
                                 if msg_field == 1 and msg_wire == 2:
                                     data_length, msg_offset = self.decode_varint(data, msg_offset)
                                     data_end = msg_offset + data_length
@@ -163,6 +164,11 @@ class CastLatencyConsumer:
                                                 data_offset = data_end
                                                 
                                     msg_offset = data_end
+                                # Look for hash field in message (field 2)
+                                elif msg_field == 2 and msg_wire == 2:
+                                    hash_length, msg_offset = self.decode_varint(data, msg_offset)
+                                    message_hash = data[msg_offset:msg_offset + hash_length]
+                                    msg_offset += hash_length
                                 else:
                                     # Skip unknown message fields
                                     if msg_wire == 0:
@@ -202,11 +208,11 @@ class CastLatencyConsumer:
             if cast_timestamp:
                 cast_timestamp = cast_timestamp * 1000  # Assuming it's in seconds
                 
-            return event_timestamp, cast_timestamp, fid
+            return event_timestamp, cast_timestamp, fid, message_hash
             
         except Exception as e:
             logger.error(f"Error parsing protobuf: {e}")
-            return None, None, None
+            return None, None, None, None
             
     def process_message(self, stream_key: str, message_id: str, data: Dict[str, bytes]):
         """Process a single message and calculate latency"""
@@ -215,11 +221,15 @@ class CastLatencyConsumer:
             raw_data = data.get(b'data', b'')
             
             # Parse the HubEvent
-            event_timestamp_ms, cast_timestamp_ms, fid = self.parse_hub_event(raw_data)
+            event_timestamp_ms, cast_timestamp_ms, fid, message_hash = self.parse_hub_event(raw_data)
             
             if not all([cast_timestamp_ms, fid]):
                 logger.debug(f"Could not extract timestamp/FID from message {message_id}")
                 return
+            
+            # Print cast info immediately
+            hash_hex = message_hash.hex() if message_hash else "unknown"
+            logger.info(f"🎯 New Cast! FID: {fid}, Hash: 0x{hash_hex}")
                 
             # Calculate latencies
             current_time_ms = int(time.time() * 1000)
@@ -244,8 +254,9 @@ class CastLatencyConsumer:
             if len(stats['latencies']) > 1000:
                 stats['latencies'].pop(0)
             
-            # Log the latency
-            log_msg = f"Cast from FID {fid} - E2E Latency: {e2e_latency_ms}ms"
+            # Log the latency and cast info
+            hash_hex = message_hash.hex() if message_hash else "unknown"
+            log_msg = f"Cast from FID {fid}, Hash: 0x{hash_hex} - E2E Latency: {e2e_latency_ms}ms"
             if processing_latency_ms:
                 log_msg += f", Processing Latency: {processing_latency_ms}ms"
             log_msg += f" (Message ID: {message_id})"
